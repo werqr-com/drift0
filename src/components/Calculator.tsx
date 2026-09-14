@@ -1,11 +1,24 @@
 import { useState, useEffect, useRef } from "react";
 import type { BallisticsResult } from "../lib/ballistics";
 import type { ScopeAdjustmentData } from "./App";
+import { findNearestDope } from "../lib/dopeAggregate";
+import type {
+  AuthUser,
+  DopeEntry,
+  Rifle,
+  UnitSystem,
+} from "../lib/supabase/types";
 
 interface CalculatorProps {
-	unitSystem: "imperial" | "metric";
-	onUnitSystemChange: (system: "imperial" | "metric") => void;
-	onScopeAdjustment?: (data: ScopeAdjustmentData) => void;
+  unitSystem: UnitSystem;
+  onUnitSystemChange: (system: UnitSystem) => void;
+  onScopeAdjustment?: (data: ScopeAdjustmentData) => void;
+  user?: AuthUser | null;
+  rifles?: Rifle[];
+  entries?: DopeEntry[];
+  selectedRifleId?: string | null;
+  onSelectedRifleIdChange?: (id: string | null) => void;
+  onRifleUpdated?: (rifle: Rifle) => void;
 }
 
 interface BallisticsInput {
@@ -209,8 +222,14 @@ function loadSavedValues() {
 }
 
 export function Calculator({
-	unitSystem,
-	onScopeAdjustment,
+  unitSystem,
+  onScopeAdjustment,
+  user = null,
+  rifles = [],
+  entries = [],
+  selectedRifleId = null,
+  onSelectedRifleIdChange,
+  onRifleUpdated,
 }: CalculatorProps) {
 	const saved = loadSavedValues();
 	const [muzzleVelocity, setMuzzleVelocity] = useState(
@@ -243,10 +262,12 @@ export function Calculator({
 	const [displayMode, setDisplayMode] = useState<"rings" | "grid">(
 		saved?.displayMode ?? "rings"
 	);
-	const [selectedPreset, setSelectedPreset] = useState<string>(
-		saved?.selectedPreset ?? ""
-	);
-	const ringsRef = useRef<HTMLDivElement>(null);
+  const [selectedPreset, setSelectedPreset] = useState<string>(
+    saved?.selectedPreset ?? ""
+  );
+  const [truingStatus, setTruingStatus] = useState<string | null>(null);
+  const [isTruing, setIsTruing] = useState(false);
+  const ringsRef = useRef<HTMLDivElement>(null);
 	const gridRef = useRef<HTMLDivElement>(null);
 	const shapeRef = useRef<HTMLDivElement>(null);
 	const prevUnitSystemRef = useRef<"imperial" | "metric">(unitSystem);
@@ -254,23 +275,95 @@ export function Calculator({
 		null
 	);
 
-	const loadPreset = (name: keyof typeof presets) => {
-		const preset = presets[name];
-		if (preset) {
-			let vel = preset.muzzleVelocity;
-			let weight = preset.bulletWeight;
-			if (unitSystem === "metric") {
-				vel = Math.round(vel * conv.fpsToMs);
-				weight = Number((weight * conv.grToG).toFixed(1));
-			}
-			setMuzzleVelocity(vel);
-			setBulletWeight(weight);
-			setBallisticCoefficient(preset.ballisticCoefficient);
-			setSelectedPreset(name);
-		}
-	};
+  const loadPreset = (name: keyof typeof presets) => {
+    const preset = presets[name];
+    if (preset) {
+      let vel = preset.muzzleVelocity;
+      let weight = preset.bulletWeight;
+      if (unitSystem === "metric") {
+        vel = Math.round(vel * conv.fpsToMs);
+        weight = Number((weight * conv.grToG).toFixed(1));
+      }
+      setMuzzleVelocity(vel);
+      setBulletWeight(weight);
+      setBallisticCoefficient(preset.ballisticCoefficient);
+      setSelectedPreset(name);
+      onSelectedRifleIdChange?.(null);
+    }
+  };
 
-	const calculate = async () => {
+  const loadRifle = (rifle: Rifle) => {
+    const mv = rifle.trued_muzzle_velocity_ms ?? rifle.muzzle_velocity_ms;
+    if (unitSystem === "metric") {
+      setMuzzleVelocity(Math.round(mv));
+      setBulletWeight(Number(rifle.bullet_weight_g.toFixed(1)));
+      setZeroRange(Math.round(rifle.zero_range_m));
+      setSightHeight(Number(rifle.sight_height_mm.toFixed(0)));
+    } else {
+      setMuzzleVelocity(Math.round(mv * conv.msToFps));
+      setBulletWeight(Number((rifle.bullet_weight_g * conv.gToGr).toFixed(0)));
+      setZeroRange(Math.round(rifle.zero_range_m * conv.mToYds));
+      setSightHeight(Number((rifle.sight_height_mm * conv.mmToIn).toFixed(1)));
+    }
+    setBallisticCoefficient(rifle.ballistic_coefficient);
+    setCurrentUnit(rifle.scope_unit);
+    setSelectedPreset("");
+    onSelectedRifleIdChange?.(rifle.id);
+  };
+
+  useEffect(() => {
+    if (!selectedRifleId) return;
+    const rifle = rifles.find((r) => r.id === selectedRifleId);
+    if (rifle) loadRifle(rifle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRifleId]);
+
+  const trueToDope = async (save: boolean) => {
+    if (!selectedRifleId || !user) return;
+    setIsTruing(true);
+    setTruingStatus(null);
+    try {
+      const res = await fetch("/api/true", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ rifle_id: selectedRifleId, save }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setTruingStatus(data.error || "Truing failed");
+        return;
+      }
+      const mvMs = data.muzzleVelocity as number;
+      if (unitSystem === "metric") {
+        setMuzzleVelocity(Math.round(mvMs));
+      } else {
+        setMuzzleVelocity(Math.round(mvMs * conv.msToFps));
+      }
+      setTruingStatus(
+        `Suggested MV ${
+          unitSystem === "metric"
+            ? `${Math.round(mvMs)} m/s`
+            : `${Math.round(mvMs * conv.msToFps)} fps`
+        } (RMS ${data.rmsError} ${currentUnit.toUpperCase()})`
+      );
+      if (save && onRifleUpdated) {
+        const rifle = rifles.find((r) => r.id === selectedRifleId);
+        if (rifle) {
+          onRifleUpdated({
+            ...rifle,
+            trued_muzzle_velocity_ms: mvMs,
+          });
+        }
+      }
+    } catch (err) {
+      setTruingStatus(err instanceof Error ? err.message : "Truing failed");
+    } finally {
+      setIsTruing(false);
+    }
+  };
+
+  const calculate = async () => {
 		setIsCalculating(true);
 		try {
 			// Convert to metric for API
@@ -617,16 +710,62 @@ export function Calculator({
 		return impactRadius <= targetRadius;
 	};
 
-	const actuallyOnTarget = isOnTarget();
+                  const actuallyOnTarget = isOnTarget();
 
-	return (
+  const nearestDope =
+    selectedRifleId && shootingResult
+      ? findNearestDope(
+          entries.filter((e) => e.rifle_id === selectedRifleId),
+          shootingResult.distance,
+          currentUnit,
+          20
+        )
+      : [];
+  const dopeMatch = nearestDope[0] ?? null;
+  const predictedCorrection = shootingResult
+    ? currentUnit === "moa"
+      ? shootingResult.moa
+      : shootingResult.mil
+    : null;
+  const dopeDelta =
+    dopeMatch && predictedCorrection !== null
+      ? predictedCorrection - dopeMatch.elevation_correction
+      : null;
+
+  return (
 		<div className="grid">
 			<div className="sidebar">
-				<div className="card">
-					<h3 className="card-title">Cartridge</h3>
+        <div className="card">
+          <h3 className="card-title">Cartridge</h3>
 
-					<div className="form-group full">
-						<label>Preset</label>
+          {user && rifles.length > 0 && (
+            <div className="form-group full">
+              <label>My Rifle</label>
+              <select
+                value={selectedRifleId ?? ""}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  if (!id) {
+                    onSelectedRifleIdChange?.(null);
+                    return;
+                  }
+                  const rifle = rifles.find((r) => r.id === id);
+                  if (rifle) loadRifle(rifle);
+                }}
+              >
+                <option value="">Use preset / manual…</option>
+                {rifles.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                    {r.trued_muzzle_velocity_ms ? " (trued)" : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="form-group full">
+            <label>Preset</label>
 						<select
 							value={selectedPreset}
 							onChange={(e) => {
@@ -1087,20 +1226,40 @@ export function Calculator({
 											{dropLabel}
 										</div>
 									</div>
-									<div className="shot-stat">
-										<div className="stat-label">Correction</div>
-										<div className="stat-value accent">
-											{(currentUnit === "moa"
-												? shootingResult.moa
-												: shootingResult.mil) > 0
-												? "+"
-												: ""}
-											{currentUnit === "moa"
-												? shootingResult.moa
-												: shootingResult.mil}{" "}
-											{currentUnit.toUpperCase()}
-										</div>
-									</div>
+                  <div className="shot-stat">
+                    <div className="stat-label">Correction</div>
+                    <div className="stat-value accent">
+                      {(currentUnit === "moa"
+                        ? shootingResult.moa
+                        : shootingResult.mil) > 0
+                        ? "+"
+                        : ""}
+                      {currentUnit === "moa"
+                        ? shootingResult.moa
+                        : shootingResult.mil}{" "}
+                      {currentUnit.toUpperCase()}
+                    </div>
+                    {dopeMatch && (
+                      <div className="dope-overlay">
+                        <div className="dope-overlay-label">Your DOPE</div>
+                        <div>
+                          {dopeMatch.elevation_correction > 0 ? "+" : ""}
+                          {dopeMatch.elevation_correction.toFixed(2)}{" "}
+                          {dopeMatch.correction_unit.toUpperCase()}
+                        </div>
+                        {dopeDelta !== null && (
+                          <div
+                            className={`dope-delta ${
+                              Math.abs(dopeDelta) < 0.25 ? "ok" : "warn"
+                            }`}
+                          >
+                            Δ {dopeDelta > 0 ? "+" : ""}
+                            {dopeDelta.toFixed(2)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
 									<div className="shot-stat">
 										<div className="stat-label">Time of Flight</div>
 										<div className="stat-value">
@@ -1121,42 +1280,66 @@ export function Calculator({
 									</div>
 								</div>
 
-								{onScopeAdjustment && (
-									<button
-										className="scope-adjust-btn"
-										onClick={() => {
-											onScopeAdjustment({
-												offsetX: shootingResult.windDrift,
-												offsetY: -shootingResult.drop,
-												distance: shootingResult.distance,
-											});
-										}}
-									>
-										<svg
-											viewBox="0 0 24 24"
-											fill="none"
-											stroke="currentColor"
-											strokeWidth="2"
-											strokeLinecap="round"
-											strokeLinejoin="round"
-											width="16"
-											height="16"
-										>
-											<circle cx="12" cy="12" r="10" />
-											<circle cx="12" cy="12" r="3" />
-											<line x1="12" y1="2" x2="12" y2="6" />
-											<line x1="12" y1="18" x2="12" y2="22" />
-											<line x1="2" y1="12" x2="6" y2="12" />
-											<line x1="18" y1="12" x2="22" y2="12" />
-										</svg>
-										Get Scope Adjustment
-									</button>
-								)}
-							</div>
-						</div>
-					)}
-				</div>
-			</div>
-		</div>
-	);
+                {onScopeAdjustment && (
+                  <button
+                    className="scope-adjust-btn"
+                    onClick={() => {
+                      onScopeAdjustment({
+                        offsetX: shootingResult.windDrift,
+                        offsetY: -shootingResult.drop,
+                        distance: shootingResult.distance,
+                      });
+                    }}
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      width="16"
+                      height="16"
+                    >
+                      <circle cx="12" cy="12" r="10" />
+                      <circle cx="12" cy="12" r="3" />
+                      <line x1="12" y1="2" x2="12" y2="6" />
+                      <line x1="12" y1="18" x2="12" y2="22" />
+                      <line x1="2" y1="12" x2="6" y2="12" />
+                      <line x1="18" y1="12" x2="22" y2="12" />
+                    </svg>
+                    Get Scope Adjustment
+                  </button>
+                )}
+
+                {user && selectedRifleId && (
+                  <div className="truing-actions">
+                    <button
+                      type="button"
+                      className="scope-adjust-btn secondary"
+                      disabled={isTruing}
+                      onClick={() => trueToDope(false)}
+                    >
+                      {isTruing ? "Truing…" : "True to DOPE"}
+                    </button>
+                    <button
+                      type="button"
+                      className="scope-adjust-btn secondary"
+                      disabled={isTruing}
+                      onClick={() => trueToDope(true)}
+                    >
+                      True & save
+                    </button>
+                    {truingStatus && (
+                      <p className="help-text truing-status">{truingStatus}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }

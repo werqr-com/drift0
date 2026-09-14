@@ -1,6 +1,8 @@
 ---
 import { App } from '../components/App';
 import '../styles/global.css';
+
+const user = Astro.locals.user;
 ---
 
 <!DOCTYPE html>
@@ -13,6 +15,6 @@ import '../styles/global.css';
 	<script defer src="https://seo.werqr.com/script.js" data-website-id="790d1d25-0acb-49b4-8932-d8176124e607"></script>
 </head>
 <body>
-	<App client:load />
+	<App client:load user={user} />
 </body>
 </html>
