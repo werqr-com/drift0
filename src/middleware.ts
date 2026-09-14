@@ -7,7 +7,7 @@ import {
 export const onRequest = defineMiddleware(async (context, next) => {
   context.locals.user = null;
 
-  if (isSupabaseConfigured()) {
+  if (isSupabaseConfigured(context)) {
     try {
       const supabase = createSupabaseServerClient(context);
       const { data } = await supabase.auth.getClaims();
