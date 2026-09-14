@@ -3,8 +3,14 @@ import { applyRateLimit, jsonResponse, requireUser } from "../../../lib/apiHelpe
 import { isSupabaseConfigured } from "../../../lib/supabase/server";
 
 export const POST: APIRoute = async (context) => {
-  if (!isSupabaseConfigured()) {
-    return jsonResponse({ error: "Auth is not configured" }, 503);
+  if (!isSupabaseConfigured(context)) {
+    return jsonResponse(
+      {
+        error:
+          "Auth is not configured. Set PUBLIC_SUPABASE_URL and PUBLIC_SUPABASE_PUBLISHABLE_KEY on the Worker.",
+      },
+      503
+    );
   }
 
   const auth = await requireUser(context);

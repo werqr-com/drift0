@@ -5,7 +5,7 @@ import {
 } from "../../lib/supabase/server";
 
 export const GET: APIRoute = async (context) => {
-  if (!isSupabaseConfigured()) {
+  if (!isSupabaseConfigured(context)) {
     return context.redirect("/login?error=not_configured");
   }
 

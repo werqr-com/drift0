@@ -6,11 +6,43 @@ type CookieContext = {
   cookies: {
     set: (name: string, value: string, options?: AstroCookieSetOptions) => void;
   };
+  locals?: {
+    runtime?: {
+      env?: Record<string, unknown>;
+    };
+  };
 };
 
-function getSupabaseEnv() {
-  const url = import.meta.env.PUBLIC_SUPABASE_URL;
-  const key = import.meta.env.PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+function readEnvValue(
+  name: string,
+  runtimeEnv?: Record<string, unknown>
+): string | undefined {
+  const fromMeta = (import.meta.env as Record<string, string | undefined>)[name];
+  if (fromMeta) return fromMeta;
+
+  const fromRuntime = runtimeEnv?.[name];
+  if (typeof fromRuntime === "string" && fromRuntime.length > 0) {
+    return fromRuntime;
+  }
+
+  const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } })
+    .process;
+  const fromProcess = proc?.env?.[name];
+  if (fromProcess) return fromProcess;
+
+  return undefined;
+}
+
+function getRuntimeEnv(
+  context?: CookieContext | APIContext
+): Record<string, unknown> | undefined {
+  return (context as CookieContext | undefined)?.locals?.runtime?.env;
+}
+
+function getSupabaseEnv(context?: CookieContext | APIContext) {
+  const runtimeEnv = getRuntimeEnv(context);
+  const url = readEnvValue("PUBLIC_SUPABASE_URL", runtimeEnv);
+  const key = readEnvValue("PUBLIC_SUPABASE_PUBLISHABLE_KEY", runtimeEnv);
 
   if (!url || !key) {
     throw new Error(
@@ -22,7 +54,7 @@ function getSupabaseEnv() {
 }
 
 export function createSupabaseServerClient(context: CookieContext | APIContext) {
-  const { url, key } = getSupabaseEnv();
+  const { url, key } = getSupabaseEnv(context);
 
   return createServerClient(url, key, {
     cookies: {
@@ -38,9 +70,12 @@ export function createSupabaseServerClient(context: CookieContext | APIContext) 
   });
 }
 
-export function isSupabaseConfigured(): boolean {
+export function isSupabaseConfigured(
+  context?: CookieContext | APIContext
+): boolean {
+  const runtimeEnv = getRuntimeEnv(context);
   return Boolean(
-    import.meta.env.PUBLIC_SUPABASE_URL &&
-      import.meta.env.PUBLIC_SUPABASE_PUBLISHABLE_KEY
+    readEnvValue("PUBLIC_SUPABASE_URL", runtimeEnv) &&
+      readEnvValue("PUBLIC_SUPABASE_PUBLISHABLE_KEY", runtimeEnv)
   );
 }

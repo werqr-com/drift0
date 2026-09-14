@@ -12,5 +12,9 @@
 	},
 	"observability": {
     "enabled": true
+  },
+  "vars": {
+    "PUBLIC_SUPABASE_URL": "https://zhhsdgfaojgnbcfvjbge.supabase.co",
+    "PUBLIC_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_JNg38O0FZAyViV6GOsE-6Q_2eUX8u62"
   }
 }
