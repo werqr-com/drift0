@@ -1,11 +1,25 @@
 import { useState, useEffect, useRef } from "react";
 import type { ScopeAdjustmentData } from "./App";
+import { createClientId, enqueueDope } from "../lib/offlineQueue";
+import type {
+  AuthUser,
+  DopeEntry,
+  Location,
+  Rifle,
+  UnitSystem,
+} from "../lib/supabase/types";
 
 interface ScopeAdjustmentProps {
-	unitSystem: "imperial" | "metric";
-	onUnitSystemChange: (system: "imperial" | "metric") => void;
-	initialData?: ScopeAdjustmentData | null;
-	onDataConsumed?: () => void;
+  unitSystem: UnitSystem;
+  onUnitSystemChange: (system: UnitSystem) => void;
+  initialData?: ScopeAdjustmentData | null;
+  onDataConsumed?: () => void;
+  user?: AuthUser | null;
+  rifles?: Rifle[];
+  locations?: Location[];
+  selectedRifleId?: string | null;
+  onSelectedRifleIdChange?: (id: string | null) => void;
+  onDopeSaved?: (entry: DopeEntry) => void;
 }
 
 const conv = {
@@ -34,9 +48,15 @@ const targetPresets = {
 };
 
 export function ScopeAdjustment({
-	unitSystem,
-	initialData,
-	onDataConsumed,
+  unitSystem,
+  initialData,
+  onDataConsumed,
+  user = null,
+  rifles = [],
+  locations = [],
+  selectedRifleId = null,
+  onSelectedRifleIdChange,
+  onDopeSaved,
 }: ScopeAdjustmentProps) {
 	const [targetType, setTargetType] = useState<keyof typeof targetPresets>(
 		"ipsc"
@@ -47,9 +67,11 @@ export function ScopeAdjustment({
 	const [offsetX, setOffsetX] = useState(0);
 	const [offsetY, setOffsetY] = useState(0);
 	const [displayMode, setDisplayMode] = useState<"rings" | "grid">("rings");
-	const [shotMarkerVisible, setShotMarkerVisible] = useState(false);
-	const [shotMarkerPos, setShotMarkerPos] = useState({ x: 0, y: 0 });
-	const targetVisualRef = useRef<HTMLDivElement>(null);
+  const [shotMarkerVisible, setShotMarkerVisible] = useState(false);
+  const [shotMarkerPos, setShotMarkerPos] = useState({ x: 0, y: 0 });
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const targetVisualRef = useRef<HTMLDivElement>(null);
 	const ringsRef = useRef<HTMLDivElement>(null);
 	const gridRef = useRef<HTMLDivElement>(null);
 	const shapeRef = useRef<HTMLDivElement>(null);
@@ -336,24 +358,103 @@ export function ScopeAdjustment({
 						{Math.abs(milX).toFixed(2)} MIL {horizDir.toLowerCase()} ·{" "}
 						{Math.abs(milY).toFixed(2)} MIL {vertDir.toLowerCase()}
 					</span>
-				</div>
-			</>
-		);
-	};
+        </div>
+      </>
+    );
+  };
 
-	return (
-		<div className="card">
-			<h2 className="card-title">Scope Adjustment</h2>
-			<p
-				style={{
-					fontSize: "0.8125rem",
-					color: "var(--muted-foreground)",
-					margin: "0 0 1.25rem 0",
-				}}
-			>
-				Click on the target where your shot landed to calculate scope
-				adjustments.
-			</p>
+  const saveAsDope = async () => {
+    if (!user || !selectedRifleId) {
+      setSaveStatus("Select a rifle (and sign in) to save DOPE");
+      return;
+    }
+    setSaving(true);
+    setSaveStatus(null);
+
+    const rifle = rifles.find((r) => r.id === selectedRifleId);
+    const unit = rifle?.scope_unit ?? "moa";
+
+    let offsetXInches = offsetX;
+    let offsetYInches = offsetY;
+    let distanceYards = distance;
+    if (isMetric) {
+      offsetXInches = offsetX * conv.mmToIn;
+      offsetYInches = offsetY * conv.mmToIn;
+      distanceYards = distance * conv.mToYds;
+    }
+
+    const moaPerInchAt100 = 1 / 1.047;
+    const milPerInchAt100 = 1 / 3.6;
+    const distanceFactor = 100 / Math.max(distanceYards, 1);
+    // OffsetY: + high (above POA) means dial down → negative elevation correction
+    // OffsetX: + right means dial left → we store +right as windage correction
+    const elevMoa = -offsetYInches * moaPerInchAt100 * distanceFactor;
+    const windMoa = offsetXInches * moaPerInchAt100 * distanceFactor;
+    const elevMil = -offsetYInches * milPerInchAt100 * distanceFactor;
+    const windMil = offsetXInches * milPerInchAt100 * distanceFactor;
+
+    const elevation_correction = Number(
+      (unit === "moa" ? elevMoa : elevMil).toFixed(2)
+    );
+    const windage_correction = Number(
+      (unit === "moa" ? windMoa : windMil).toFixed(2)
+    );
+    const distance_m = isMetric
+      ? distance
+      : Number((distance * conv.ydsToM).toFixed(2));
+
+    const client_id = createClientId();
+    const payload = {
+      client_id,
+      rifle_id: selectedRifleId,
+      location_id: null as string | null,
+      distance_m,
+      elevation_correction,
+      windage_correction,
+      correction_unit: unit as "moa" | "mil",
+      shot_at: new Date().toISOString(),
+    };
+
+    try {
+      if (!navigator.onLine) {
+        enqueueDope(payload);
+        setSaveStatus("Queued offline");
+        return;
+      }
+      const res = await fetch("/api/dope", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setSaveStatus(data.error || "Failed to save");
+        return;
+      }
+      onDopeSaved?.(data.entry);
+      setSaveStatus("Saved to DOPE");
+    } catch {
+      enqueueDope(payload);
+      setSaveStatus("Queued offline");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <h2 className="card-title">Scope Adjustment</h2>
+      <p
+        style={{
+          fontSize: "0.8125rem",
+          color: "var(--muted-foreground)",
+          margin: "0 0 1.25rem 0",
+        }}
+      >
+        Click on the target where your shot landed to calculate scope
+        adjustments.
+      </p>
 
 			<div className="target-container">
 				<div className="target-wrapper">
@@ -456,24 +557,42 @@ export function ScopeAdjustment({
 								step="1"
 							/>
 						</div>
-						<div className="form-group">
-							<label>Click Value</label>
-							<select
-								value={clickValue}
-								onChange={(e) => setClickValue(e.target.value)}
-							>
-								<option value="0.25moa">1/4 MOA</option>
-								<option value="0.5moa">1/2 MOA</option>
-								<option value="1moa">1 MOA</option>
-								<option value="0.1mil">0.1 MIL</option>
-								<option value="0.2mil">0.2 MIL</option>
-							</select>
-						</div>
-						<div className="form-group">
-							<label>
-								Horizontal Offset{" "}
-								<span className="label-hint">({isMetric ? "mm" : "in"})</span>
-							</label>
+          <div className="form-group">
+            <label>Click Value</label>
+            <select
+              value={clickValue}
+              onChange={(e) => setClickValue(e.target.value)}
+            >
+              <option value="0.25moa">1/4 MOA</option>
+              <option value="0.5moa">1/2 MOA</option>
+              <option value="1moa">1 MOA</option>
+              <option value="0.1mil">0.1 MIL</option>
+              <option value="0.2mil">0.2 MIL</option>
+            </select>
+          </div>
+          {user && rifles.length > 0 && (
+            <div className="form-group full">
+              <label>Save to rifle</label>
+              <select
+                value={selectedRifleId ?? ""}
+                onChange={(e) =>
+                  onSelectedRifleIdChange?.(e.target.value || null)
+                }
+              >
+                <option value="">Select rifle…</option>
+                {rifles.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <div className="form-group">
+            <label>
+              Horizontal Offset{" "}
+              <span className="label-hint">({isMetric ? "mm" : "in"})</span>
+            </label>
 							<input
 								type="number"
 								value={offsetX}
@@ -497,29 +616,52 @@ export function ScopeAdjustment({
 						</div>
 					</div>
 
-					<div
-						className={`adjustment-result ${
-							Math.abs(offsetX) > 0.01 || Math.abs(offsetY) > 0.01
-								? "has-adjustment"
-								: ""
-						}`}
-					>
-						{Math.abs(offsetX) < 0.01 && Math.abs(offsetY) < 0.01 ? (
-							<div
-								style={{
-									textAlign: "center",
-									color: "var(--muted-foreground)",
-									fontSize: "0.875rem",
-								}}
-							>
-								Click on target or enter offset values to see adjustments
-							</div>
-						) : (
-							calculateAdjustment()
-						)}
-					</div>
-				</div>
-			</div>
-		</div>
-	);
+          <div
+            className={`adjustment-result ${
+              Math.abs(offsetX) > 0.01 || Math.abs(offsetY) > 0.01
+                ? "has-adjustment"
+                : ""
+            }`}
+          >
+            {Math.abs(offsetX) < 0.01 && Math.abs(offsetY) < 0.01 ? (
+              <div
+                style={{
+                  textAlign: "center",
+                  color: "var(--muted-foreground)",
+                  fontSize: "0.875rem",
+                }}
+              >
+                Click on target or enter offset values to see adjustments
+              </div>
+            ) : (
+              calculateAdjustment()
+            )}
+          </div>
+
+          {user && (
+            <div className="save-dope-block">
+              <button
+                type="button"
+                className="scope-adjust-btn"
+                disabled={
+                  saving ||
+                  !selectedRifleId ||
+                  (Math.abs(offsetX) < 0.01 && Math.abs(offsetY) < 0.01)
+                }
+                onClick={saveAsDope}
+              >
+                {saving ? "Saving…" : "Save as DOPE"}
+              </button>
+              {locations.length > 0 && (
+                <p className="help-text">
+                  Tip: tag locations from the DOPE tab for richer records.
+                </p>
+              )}
+              {saveStatus && <p className="help-text">{saveStatus}</p>}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
