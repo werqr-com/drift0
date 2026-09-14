@@ -39,7 +39,7 @@ export function applyRateLimit(
 export async function requireUser(
   context: APIContext
 ): Promise<{ user: AuthUser; supabase: ReturnType<typeof createSupabaseServerClient> } | Response> {
-  if (!isSupabaseConfigured()) {
+  if (!isSupabaseConfigured(context)) {
     return jsonResponse({ error: "Auth is not configured" }, 503);
   }
 
