@@ -10,6 +10,11 @@ import type {
   UnitSystem,
 } from "../lib/supabase/types";
 import { QuickAddDope } from "./QuickAddDope";
+import {
+  ADD_LOCATION_VALUE,
+  ADD_RIFLE_VALUE,
+  EntityCreatePanel,
+} from "./EntityCreatePanel";
 
 interface DopeLogProps {
   user: AuthUser | null;
@@ -19,15 +24,17 @@ interface DopeLogProps {
   entries: DopeEntry[];
   pendingCount: number;
   onEntriesChange: (entries: DopeEntry[]) => void;
+  onRiflesChange: (rifles: Rifle[]) => void;
+  onLocationsChange: (locations: Location[]) => void;
   onRefresh: () => void;
 }
 
 type DopeMode = "card" | "entries" | "chart";
+type CreateKind = "rifle" | "location" | null;
 
 const conv = {
   mToYds: 1.09361,
   ydsToM: 0.9144,
-  mmToIn: 0.03937,
 };
 
 export function DopeLog({
@@ -38,6 +45,8 @@ export function DopeLog({
   entries,
   pendingCount,
   onEntriesChange,
+  onRiflesChange,
+  onLocationsChange,
   onRefresh,
 }: DopeLogProps) {
   const [mode, setMode] = useState<DopeMode>("card");
@@ -46,6 +55,7 @@ export function DopeLog({
   const [unit, setUnit] = useState<ScopeUnit>("moa");
   const [editing, setEditing] = useState<DopeEntry | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
+  const [createKind, setCreateKind] = useState<CreateKind>(null);
   const [predicted, setPredicted] = useState<{ distance: number; value: number }[]>(
     []
   );
@@ -351,9 +361,15 @@ export function DopeLog({
         <div className="dope-filters">
           <select
             value={rifleId}
+            aria-label="Filter by rifle"
             onChange={(e) => {
-              setRifleId(e.target.value);
-              const r = rifles.find((x) => x.id === e.target.value);
+              const value = e.target.value;
+              if (value === ADD_RIFLE_VALUE) {
+                setCreateKind("rifle");
+                return;
+              }
+              setRifleId(value);
+              const r = rifles.find((x) => x.id === value);
               if (r) setUnit(r.scope_unit);
             }}
           >
@@ -362,11 +378,24 @@ export function DopeLog({
                 {r.name}
               </option>
             ))}
-            {rifles.length === 0 && <option value="">No rifles</option>}
+            {rifles.length === 0 && (
+              <option value="" disabled>
+                No rifles yet
+              </option>
+            )}
+            <option value={ADD_RIFLE_VALUE}>+ Add rifle…</option>
           </select>
           <select
             value={locationId}
-            onChange={(e) => setLocationId(e.target.value)}
+            aria-label="Filter by location"
+            onChange={(e) => {
+              const value = e.target.value;
+              if (value === ADD_LOCATION_VALUE) {
+                setCreateKind("location");
+                return;
+              }
+              setLocationId(value);
+            }}
           >
             <option value="">All locations</option>
             {locations.map((l) => (
@@ -374,6 +403,7 @@ export function DopeLog({
                 {l.name}
               </option>
             ))}
+            <option value={ADD_LOCATION_VALUE}>+ Add location…</option>
           </select>
           <div className="unit-toggle">
             <button
@@ -437,7 +467,30 @@ export function DopeLog({
             onRefresh();
             setQuickOpen(false);
           }}
+          onRiflesChange={onRiflesChange}
+          onLocationsChange={onLocationsChange}
           clickStep={parseClickValue(selectedRifle.click_value)}
+        />
+      )}
+
+      {createKind && (
+        <EntityCreatePanel
+          kind={createKind}
+          open
+          onClose={() => setCreateKind(null)}
+          onCreated={(entity) => {
+            if (createKind === "rifle") {
+              const rifle = entity as Rifle;
+              onRiflesChange([...rifles, rifle]);
+              setRifleId(rifle.id);
+              setUnit(rifle.scope_unit);
+            } else {
+              const location = entity as Location;
+              onLocationsChange([...locations, location]);
+              setLocationId(location.id);
+            }
+            setCreateKind(null);
+          }}
         />
       )}
 
