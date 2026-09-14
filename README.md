@@ -1,34 +1,34 @@
 # Drift0 - Ballistics Calculator
 
-A precision ballistics calculator built with Astro and React.
+A precision ballistics calculator built with Astro and React, with optional accounts and a synced DOPE logbook.
 
 ## Technology Stack
 
-- **Astro** - Static site generator with server-side rendering
+- **Astro** - SSR on Cloudflare Workers
 - **React** - Interactive UI components
 - **TypeScript** - Type-safe development
+- **Supabase** - Auth (email/password) + Postgres for rifles, locations, and DOPE entries
 
 ## Project Structure
 
 ```
 drift0/
 ├── src/
-│   ├── components/      # React components
-│   │   ├── App.tsx
-│   │   ├── Calculator.tsx
-│   │   ├── DriftVisualizer.tsx
-│   │   └── ScopeAdjustment.tsx
+│   ├── components/      # React components (App, Calculator, DopeLog, AccountPanel, …)
 │   ├── lib/
-│   │   └── ballistics.ts  # Ballistics calculation engine
+│   │   ├── ballistics.ts
+│   │   ├── truing.ts          # MV truing from DOPE
+│   │   ├── dopeAggregate.ts
+│   │   ├── offlineQueue.ts    # Offline DOPE queue
+│   │   └── supabase/          # Server client + types
 │   ├── pages/
-│   │   ├── api/
-│   │   │   └── calculate.ts  # API endpoint
-│   │   └── index.astro       # Main page
-│   └── styles/
-│       └── global.css
+│   │   ├── api/               # calculate, auth, rifles, locations, dope, true, profile
+│   │   ├── login.astro / register.astro / forgot-password.astro
+│   │   └── index.astro
+│   └── styles/global.css
+├── supabase/migrations/       # Schema + RLS
 ├── astro.config.mjs
-├── package.json
-└── tsconfig.json
+└── package.json
 ```
 
 ## Development
@@ -37,113 +37,68 @@ drift0/
 # Install dependencies
 npm install
 
-# Start development server (runs on port 8080)
+# Copy env (see below) then:
 npm run dev
+
+# Unit tests (truing + DOPE aggregation)
+npm test
 
 # Build for production
 npm run build
-
-# Preview production build
-npm run preview
 ```
+
+### Environment variables
+
+Create `.env` (and optionally `.dev.vars` for Wrangler):
+
+```bash
+PUBLIC_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+```
+
+Apply migrations from `supabase/migrations/` to your Supabase project. In the Auth dashboard set:
+
+- Site URL: `https://drift0.werqr.com` (and `http://localhost:8080` for local)
+- Redirect URLs: `http://localhost:8080/**`, `https://drift0.werqr.com/**`
+
+Set the same `PUBLIC_*` vars in Cloudflare Pages/Workers build settings for production.
+
+Calculator and Scope Adjustment work without signing in. DOPE sync, account panel, and velocity truing require an account.
+
+## Features
+
+- **Ballistics Calculations** — trajectory with MV, BC, atmosphere, wind, zero, sight height
+- **Accounts** — email/password signup/login, account panel for profile, rifles, and locations
+- **DOPE logbook** — Card / Entries / Chart views; filter by rifle and location; on-range quick-add with offline queue
+- **DOPE → calculator** — overlay recorded corrections next to predictions; **True to DOPE** solves muzzle velocity
+- **Unit Systems** — Imperial / Metric
+- **Scope Adjustment** — MOA/MIL clicks; **Save as DOPE** when signed in
+- **Cartridge Presets** — common factory loads
 
 ## Deployment
 
 ### Cloudflare Workers/Pages
 
-This project is configured for Cloudflare Workers deployment. See [CLOUDFLARE_DEPLOYMENT.md](./CLOUDFLARE_DEPLOYMENT.md) for detailed instructions.
+See [CLOUDFLARE_DEPLOYMENT.md](./CLOUDFLARE_DEPLOYMENT.md).
 
-Quick deploy:
 ```bash
-# Build and deploy to Cloudflare
 npm run cf:build-deploy
-
-# Or deploy existing build
-npm run cf:deploy
 ```
-
-First-time deployment:
-```bash
-npm run build
-npx wrangler login
-npx wrangler pages deploy ./dist --project-name=drift0
-```
-
-## Features
-
-- **Ballistics Calculations** - Precise trajectory calculations considering:
-  - Muzzle velocity and bullet weight
-  - Ballistic coefficient (G1)
-  - Atmospheric conditions (temperature, altitude)
-  - Wind speed and direction
-  - Zero range and sight height
-
-- **Unit Systems** - Toggle between Imperial and Metric units
-
-- **Target Visualization** - Visual representation of bullet impact with:
-  - Multiple target types (IPSC, NRA B-8, steel, etc.)
-  - Hit/miss detection
-  - Zoom for off-target impacts
-
-- **Scope Adjustment** - Calculate precise scope adjustments:
-  - MOA and MIL corrections
-  - Click value conversions
-  - Windage and elevation adjustments
-
-- **Cartridge Presets** - Quick-load common cartridges:
-  - 5.56 NATO, 7.62x39
-  - .308 Win, 6.5 Creedmoor, 6.5 PRC
-  - .300 Win Mag, .300 PRC
-  - .338 Lapua, .375 CheyTac, .50 BMG
-  - And more...
-
-## Migration from Deno
-
-This project was migrated from Deno to Astro for better performance and ecosystem compatibility. The original Deno files are still present in the root directory for reference:
-
-- `main.ts` - Original Deno server (now replaced by Astro)
-- `app.tsx` - Original entry point (now in `src/pages/index.astro`)
-- `build.ts` - Original esbuild script (no longer needed)
-- `deno.json` - Deno configuration (can be removed)
 
 ## API
 
 ### POST `/api/calculate`
 
-Calculate ballistics trajectory.
+Calculate ballistics trajectory (metric input/output). Rate-limited.
 
-**Request Body:**
-```json
-{
-  "muzzleVelocity": 823,
-  "bulletWeight": 10.9,
-  "ballisticCoefficient": 0.462,
-  "zeroRange": 91.44,
-  "targetDistance": 914.4,
-  "windSpeed": 4.47,
-  "windAngle": 90,
-  "sightHeight": 38.1,
-  "temperature": 15,
-  "altitude": 0
-}
-```
+Authenticated JSON APIs (cookie session):
 
-**Response:**
-```json
-[
-  {
-    "distance": 0,
-    "velocity": 823,
-    "energy": 3693,
-    "drop": -38,
-    "windDrift": 0,
-    "timeOfFlight": 0,
-    "moa": 0,
-    "mil": 0
-  },
-  ...
-]
-```
+- `POST /api/auth/{signup,login,logout,forgot,reset}`
+- `GET|PUT /api/profile`
+- `GET|POST /api/rifles`, `PUT|DELETE /api/rifles/:id`
+- `GET|POST /api/locations`, `PUT|DELETE /api/locations/:id`
+- `GET|POST /api/dope`, `PUT|DELETE /api/dope/:id` (upsert on `client_id` for offline sync)
+- `POST /api/true` — muzzle-velocity truing from a rifle’s DOPE
 
 ## License
 
