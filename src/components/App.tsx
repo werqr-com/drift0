@@ -193,6 +193,8 @@ export function App({ user }: AppProps) {
             entries={entries}
             pendingCount={pendingCount}
             onEntriesChange={setEntries}
+            onRiflesChange={setRifles}
+            onLocationsChange={setLocations}
             onRefresh={refreshData}
           />
         );

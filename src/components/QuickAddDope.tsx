@@ -9,6 +9,11 @@ import type {
   Rifle,
   UnitSystem,
 } from "../lib/supabase/types";
+import {
+  ADD_LOCATION_VALUE,
+  ADD_RIFLE_VALUE,
+  EntityCreatePanel,
+} from "./EntityCreatePanel";
 
 interface QuickAddDopeProps {
   rifle: Rifle;
@@ -19,6 +24,8 @@ interface QuickAddDopeProps {
   clickStep: number;
   onClose: () => void;
   onSaved: (entry: DopeEntry) => void;
+  onRiflesChange: (rifles: Rifle[]) => void;
+  onLocationsChange: (locations: Location[]) => void;
 }
 
 const conv = {
@@ -35,10 +42,15 @@ export function QuickAddDope({
   clickStep,
   onClose,
   onSaved,
+  onRiflesChange,
+  onLocationsChange,
 }: QuickAddDopeProps) {
   const isMetric = unitSystem === "metric";
   const [rifleId, setRifleId] = useState(rifle.id);
   const [locationId, setLocationId] = useState(lastEntry?.location_id ?? "");
+  const [createKind, setCreateKind] = useState<"rifle" | "location" | null>(
+    null
+  );
   const [distanceDisplay, setDistanceDisplay] = useState(() => {
     const m = lastEntry?.distance_m ?? 100;
     return isMetric ? Math.round(m) : Math.round(m * conv.mToYds);
@@ -158,12 +170,23 @@ export function QuickAddDope({
 
         <div className="form-group full">
           <label>Rifle</label>
-          <select value={rifleId} onChange={(e) => setRifleId(e.target.value)}>
+          <select
+            value={rifleId}
+            onChange={(e) => {
+              const value = e.target.value;
+              if (value === ADD_RIFLE_VALUE) {
+                setCreateKind("rifle");
+                return;
+              }
+              setRifleId(value);
+            }}
+          >
             {rifles.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.name}
               </option>
             ))}
+            <option value={ADD_RIFLE_VALUE}>+ Add rifle…</option>
           </select>
         </div>
 
@@ -171,7 +194,14 @@ export function QuickAddDope({
           <label>Location</label>
           <select
             value={locationId}
-            onChange={(e) => setLocationId(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              if (value === ADD_LOCATION_VALUE) {
+                setCreateKind("location");
+                return;
+              }
+              setLocationId(value);
+            }}
           >
             <option value="">None</option>
             {locations.map((l) => (
@@ -179,6 +209,7 @@ export function QuickAddDope({
                 {l.name}
               </option>
             ))}
+            <option value={ADD_LOCATION_VALUE}>+ Add location…</option>
           </select>
         </div>
 
@@ -311,6 +342,26 @@ export function QuickAddDope({
           {saving ? "Saving…" : navigator.onLine ? "Save DOPE" : "Queue offline"}
         </button>
       </div>
+
+      {createKind && (
+        <EntityCreatePanel
+          kind={createKind}
+          open
+          onClose={() => setCreateKind(null)}
+          onCreated={(entity) => {
+            if (createKind === "rifle") {
+              const created = entity as Rifle;
+              onRiflesChange([...rifles, created]);
+              setRifleId(created.id);
+            } else {
+              const created = entity as Location;
+              onLocationsChange([...locations, created]);
+              setLocationId(created.id);
+            }
+            setCreateKind(null);
+          }}
+        />
+      )}
     </div>
   );
 }

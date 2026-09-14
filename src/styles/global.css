@@ -2333,3 +2333,27 @@ tr.clickable-row.row-active td {
     width: 100%;
   }
 }
+
+.entity-create-panel {
+  animation: slideInPanel 0.22s ease-out;
+}
+
+.entity-create-hint {
+  margin: 0 0 1rem 0;
+}
+
+@keyframes slideInPanel {
+  from {
+    transform: translateX(100%);
+    opacity: 0.6;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.dope-filters select option[value="__add_rifle__"],
+.dope-filters select option[value="__add_location__"] {
+  font-weight: 600;
+}
